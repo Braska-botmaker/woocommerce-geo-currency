@@ -1,1 +1,217 @@
-{"generator":"Code Snippets v3.9.6","date_created":"2026-06-23 06:05","snippets":[{"id":34,"name":"CRX geo lang currency [CLONE]","desc":"<p>Automaticky zobraz\u00ed str\u00e1nku v CZ\/EN dle IP n\u00e1v\u0161t\u011bvn\u00edka<\/p>","code":"defined( 'ABSPATH' ) || exit;\n\n\/* ------------------------------------------------------------\n * CONFIG\n * ------------------------------------------------------------ *\/\n\nfunction crx_geo_target_currency( string $country ): string {\n    return ( $country === 'CZ' ) ? 'CZK' : 'EUR';\n}\n\nfunction crx_geo_cookie_ttl(): int {\n    return DAY_IN_SECONDS * 30;\n}\n\n\/* ------------------------------------------------------------\n * HELPERS\n * ------------------------------------------------------------ *\/\n\nfunction crx_is_bot_request(): bool {\n    $ua = strtolower( $_SERVER['HTTP_USER_AGENT'] ?? '' );\n    if ( $ua === '' ) return false;\n    return (bool) preg_match(\n        '\/bot|crawl|slurp|spider|google|bing|yandex|baidu|duckduck|facebookexternalhit|twitterbot|lighthouse|gptbot|chatgpt|claudebot|ccbot|semrush|ahrefs|mj12bot|crawler|monitor|uptime\/i',\n        $ua\n    );\n}\n\nfunction crx_is_front_get(): bool {\n    return ( ( $_SERVER['REQUEST_METHOD'] ?? 'GET' ) === 'GET' )\n        && ! is_admin()\n        && ! wp_doing_ajax()\n        && ! wp_doing_cron()\n        && ! wp_is_json_request();\n}\n\nfunction crx_geo_country(): string {\n    static $country = null;\n    if ( $country !== null ) return $country;\n    if ( ! class_exists( 'WC_Geolocation' ) ) {\n        $country = '';\n        return $country;\n    }\n    $geo     = WC_Geolocation::geolocate_ip();\n    $country = strtoupper( $geo['country'] ?? '' );\n    return $country;\n}\n\nfunction crx_get_cookie( string $name ): string {\n    return (string) ( $_COOKIE[ $name ] ?? '' );\n}\n\nfunction crx_get_current_currency_from_cookies(): string {\n    $wcml = crx_get_cookie( 'wcml_client_currency' );\n    $woo  = crx_get_cookie( 'woocommerce_current_currency' );\n    if ( $wcml !== '' && $wcml === $woo ) return $wcml;\n    return '';\n}\n\n\/* ------------------------------------------------------------\n * JS COOKIE HELPERS\n * ------------------------------------------------------------ *\/\n\nfunction crx_output_js_cookie_helpers(): void {\n    static $printed = false;\n    if ( $printed ) return;\n    $printed = true;\n    $ttl = crx_geo_cookie_ttl();\n    ?>\n    <script>\n    (function() {\n        window.crxSetCookie = function(name, value, ttlSeconds) {\n            var exp = new Date();\n            exp.setTime(exp.getTime() + ttlSeconds * 1000);\n            document.cookie = name + '=' + encodeURIComponent(value)\n                + '; expires=' + exp.toUTCString()\n                + '; path=\/'\n                + '; secure'\n                + '; SameSite=Lax';\n        };\n        window.crxGetCookie = function(name) {\n            var v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');\n            return v ? decodeURIComponent(v[2]) : '';\n        };\n        window.crxCookieTtl = <?php echo (int) $ttl; ?>;\n    })();\n    <\/script>\n    <?php\n}\n\nfunction crx_set_wcml_runtime_currency( string $currency ): void {\n    if ( $currency === '' ) return;\n    if ( ! isset( $GLOBALS['woocommerce_wpml'] ) || ! is_object( $GLOBALS['woocommerce_wpml'] ) ) return;\n    $wpml_woo = $GLOBALS['woocommerce_wpml'];\n    if (\n        isset( $wpml_woo->multi_currency )\n        && is_object( $wpml_woo->multi_currency )\n        && method_exists( $wpml_woo->multi_currency, 'set_client_currency' )\n    ) {\n        $wpml_woo->multi_currency->set_client_currency( $currency );\n    }\n}\n\nfunction crx_force_geo_currency( string $currency ): bool {\n    if ( $currency === '' ) return false;\n    crx_set_wcml_runtime_currency( $currency );\n    add_action( 'wp_footer', function() use ( $currency ) {\n        crx_output_js_cookie_helpers();\n        ?>\n        <script>\n        (function() {\n            var c = <?php echo wp_json_encode( $currency ); ?>;\n            if (window.crxGetCookie('wcml_client_currency') !== c) {\n                window.crxSetCookie('wcml_client_currency', c, window.crxCookieTtl);\n            }\n            if (window.crxGetCookie('woocommerce_current_currency') !== c) {\n                window.crxSetCookie('woocommerce_current_currency', c, window.crxCookieTtl);\n            }\n        })();\n        <\/script>\n        <?php\n    }, 5 );\n    return true;\n}\n\n\/* ------------------------------------------------------------\n * M\u011aNA: v\u017edy podle geo, na ka\u017ed\u00e9m requestu\n * ------------------------------------------------------------ *\/\nadd_action( 'wp', function () {\n    if ( is_admin() ) return;\n    if ( crx_is_bot_request() ) return;\n\n    $country = crx_geo_country();\n    if ( $country === '' ) return;\n\n    crx_force_geo_currency( crx_geo_target_currency( $country ) );\n}, 10 );\n\n\/* ------------------------------------------------------------\n * JAZYK: detekce podle jazyka prohl\u00ed\u017ee\u010de, pouze p\u0159i prvn\u00ed n\u00e1v\u0161t\u011bv\u011b.\n * WPML p\u0159ep\u00edna\u010d funguje p\u0159irozen\u011b \u2014 po p\u0159epnut\u00ed se ulo\u017e\u00ed cookie\n * a detekce se u\u017e nespust\u00ed.\n * ------------------------------------------------------------ *\/\nadd_action( 'wp_footer', function () {\n    if ( is_admin() ) return;\n    if ( crx_is_bot_request() ) return;\n    if ( ! defined( 'ICL_LANGUAGE_CODE' ) ) return;\n\n    $current_lang = strtolower( ICL_LANGUAGE_CODE );\n    if ( ! in_array( $current_lang, [ 'cs', 'en' ], true ) ) return;\n\n    $ttl = crx_geo_cookie_ttl();\n    ?>\n    <script>\n    (function () {\n        if ( typeof window.crxGetCookie !== 'function' ) return;\n\n        var ttl         = <?php echo (int) $ttl; ?>;\n        var currentLang = <?php echo wp_json_encode( $current_lang ); ?>;\n        var cookieName  = 'crx_manual_lang';\n        var manualLang  = window.crxGetCookie( cookieName );\n\n        \/\/ V\u017edy ulo\u017e aktu\u00e1ln\u00ed jazyk str\u00e1nky do cookie.\n        \/\/ Pokud u\u017eivatel p\u0159epnul p\u0159es WPML, str\u00e1nka se na\u010detla\n        \/\/ ve spr\u00e1vn\u00e9m jazyce a my si to zapamatujeme.\n        if ( manualLang !== currentLang ) {\n            window.crxSetCookie( cookieName, currentLang, ttl );\n            manualLang = currentLang;\n        }\n\n        \/\/ Cookie pr\u00e1v\u011b nastavena nebo u\u017e byla spr\u00e1vn\u00e1 \u2014\n        \/\/ pokud odpov\u00edd\u00e1 aktu\u00e1ln\u00ed str\u00e1nce, nic dal\u0161\u00edho ned\u011bl\u00e1me.\n        \/\/ Detekci jazyka prohl\u00ed\u017ee\u010de spust\u00edme POUZE pokud cookie\n        \/\/ v\u016fbec neexistovala p\u0159ed t\u00edmto na\u010dten\u00edm str\u00e1nky.\n        \/\/ To pozn\u00e1me tak, \u017ee manualLang byl pr\u00e1zdn\u00fd.\n        if ( manualLang !== '' && manualLang === currentLang ) {\n            \/\/ Cookie existovala a odpov\u00edd\u00e1 \u2014 u\u017eivatel p\u0159epnul nebo\n            \/\/ u\u017e byl na spr\u00e1vn\u00e9 str\u00e1nce. Nic ned\u011bl\u00e1me.\n            return;\n        }\n\n        \/\/ Sem se dostaneme pouze p\u0159i \u00fapln\u011b prvn\u00ed n\u00e1v\u0161t\u011bv\u011b\n        \/\/ (cookie nebyla nastavena v\u016fbec).\n        var browserLangs = navigator.languages || [ navigator.language || 'en' ];\n        var targetLang   = 'en';\n\n        for ( var i = 0; i < browserLangs.length; i++ ) {\n            var l = browserLangs[i].toLowerCase();\n            if ( l === 'cs' || l.startsWith('cs-') || l === 'sk' || l.startsWith('sk-') ) {\n                targetLang = 'cs';\n                break;\n            }\n        }\n\n        window.crxSetCookie( cookieName, targetLang, ttl );\n\n        if ( currentLang !== targetLang ) {\n            var links = document.querySelectorAll(\n                'a[hreflang=\"' + targetLang + '\"]'\n            );\n            if ( links.length > 0 ) {\n                window.location.href = links[0].href;\n                return;\n            }\n\n            var url = window.location.href;\n            if ( targetLang === 'en' ) {\n                url = url.replace( \/\\\/(cs)(\\\/|$)\/, '\/en$2' );\n            } else {\n                url = url.replace( \/\\\/(en)(\\\/|$)\/, '\/cs$2' );\n            }\n            if ( url !== window.location.href ) {\n                window.location.href = url;\n            }\n        }\n    })();\n    <\/script>\n    <?php\n}, 20 );","active":true,"modified":"2026-04-20 13:19:02","revision":"1"}]}
+defined( 'ABSPATH' ) || exit;
+
+/* ------------------------------------------------------------
+ * CONFIG
+ * ------------------------------------------------------------ */
+
+function crx_geo_target_currency( string $country ): string {
+    return ( $country === 'CZ' ) ? 'CZK' : 'EUR';
+}
+
+function crx_geo_cookie_ttl(): int {
+    return DAY_IN_SECONDS * 30;
+}
+
+/* ------------------------------------------------------------
+ * HELPERS
+ * ------------------------------------------------------------ */
+
+function crx_is_bot_request(): bool {
+    $ua = strtolower( $_SERVER['HTTP_USER_AGENT'] ?? '' );
+    if ( $ua === '' ) return false;
+    return (bool) preg_match(
+        '/bot|crawl|slurp|spider|google|bing|yandex|baidu|duckduck|facebookexternalhit|twitterbot|lighthouse|gptbot|chatgpt|claudebot|ccbot|semrush|ahrefs|mj12bot|crawler|monitor|uptime/i',
+        $ua
+    );
+}
+
+function crx_is_front_get(): bool {
+    return ( ( $_SERVER['REQUEST_METHOD'] ?? 'GET' ) === 'GET' )
+        && ! is_admin()
+        && ! wp_doing_ajax()
+        && ! wp_doing_cron()
+        && ! wp_is_json_request();
+}
+
+function crx_geo_country(): string {
+    static $country = null;
+    if ( $country !== null ) return $country;
+    if ( ! class_exists( 'WC_Geolocation' ) ) {
+        $country = '';
+        return $country;
+    }
+    $geo     = WC_Geolocation::geolocate_ip();
+    $country = strtoupper( $geo['country'] ?? '' );
+    return $country;
+}
+
+function crx_get_cookie( string $name ): string {
+    return (string) ( $_COOKIE[ $name ] ?? '' );
+}
+
+function crx_get_current_currency_from_cookies(): string {
+    $wcml = crx_get_cookie( 'wcml_client_currency' );
+    $woo  = crx_get_cookie( 'woocommerce_current_currency' );
+    if ( $wcml !== '' && $wcml === $woo ) return $wcml;
+    return '';
+}
+
+/* ------------------------------------------------------------
+ * JS COOKIE HELPERS
+ * ------------------------------------------------------------ */
+
+function crx_output_js_cookie_helpers(): void {
+    static $printed = false;
+    if ( $printed ) return;
+    $printed = true;
+    $ttl = crx_geo_cookie_ttl();
+    ?>
+    <script>
+    (function() {
+        window.crxSetCookie = function(name, value, ttlSeconds) {
+            var exp = new Date();
+            exp.setTime(exp.getTime() + ttlSeconds * 1000);
+            document.cookie = name + '=' + encodeURIComponent(value)
+                + '; expires=' + exp.toUTCString()
+                + '; path=/'
+                + '; secure'
+                + '; SameSite=Lax';
+        };
+        window.crxGetCookie = function(name) {
+            var v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
+            return v ? decodeURIComponent(v[2]) : '';
+        };
+        window.crxCookieTtl = <?php echo (int) $ttl; ?>;
+    })();
+    </script>
+    <?php
+}
+
+function crx_set_wcml_runtime_currency( string $currency ): void {
+    if ( $currency === '' ) return;
+    if ( ! isset( $GLOBALS['woocommerce_wpml'] ) || ! is_object( $GLOBALS['woocommerce_wpml'] ) ) return;
+    $wpml_woo = $GLOBALS['woocommerce_wpml'];
+    if (
+        isset( $wpml_woo->multi_currency )
+        && is_object( $wpml_woo->multi_currency )
+        && method_exists( $wpml_woo->multi_currency, 'set_client_currency' )
+    ) {
+        $wpml_woo->multi_currency->set_client_currency( $currency );
+    }
+}
+
+function crx_force_geo_currency( string $currency ): bool {
+    if ( $currency === '' ) return false;
+    crx_set_wcml_runtime_currency( $currency );
+    add_action( 'wp_footer', function() use ( $currency ) {
+        crx_output_js_cookie_helpers();
+        ?>
+        <script>
+        (function() {
+            var c = <?php echo wp_json_encode( $currency ); ?>;
+            if (window.crxGetCookie('wcml_client_currency') !== c) {
+                window.crxSetCookie('wcml_client_currency', c, window.crxCookieTtl);
+            }
+            if (window.crxGetCookie('woocommerce_current_currency') !== c) {
+                window.crxSetCookie('woocommerce_current_currency', c, window.crxCookieTtl);
+            }
+        })();
+        </script>
+        <?php
+    }, 5 );
+    return true;
+}
+
+/* ------------------------------------------------------------
+ * MĚNA: vždy podle geo, na každém requestu
+ * ------------------------------------------------------------ */
+
+add_filter( 'wcml_client_currency', function( $currency ) {
+    if ( is_admin() ) return $currency;
+    if ( crx_is_bot_request() ) return $currency;
+
+    $country = crx_geo_country();
+    if ( $country === '' ) return $currency;
+
+    return crx_geo_target_currency( $country );
+}, 20 );
+
+add_action( 'wp', function () {
+    if ( is_admin() ) return;
+    if ( crx_is_bot_request() ) return;
+
+    $country = crx_geo_country();
+    if ( $country === '' ) return;
+
+    crx_force_geo_currency( crx_geo_target_currency( $country ) );
+}, 10 );
+
+/* ------------------------------------------------------------
+ * JAZYK: detekce podle jazyka prohlížeče, pouze při první návštěvě.
+ * WPML přepínač funguje přirozeně — po přepnutí se uloží cookie
+ * a detekce se už nespustí.
+ * ------------------------------------------------------------ */
+add_action( 'wp_footer', function () {
+    if ( is_admin() ) return;
+    if ( crx_is_bot_request() ) return;
+    if ( ! defined( 'ICL_LANGUAGE_CODE' ) ) return;
+
+    $current_lang = strtolower( ICL_LANGUAGE_CODE );
+    if ( ! in_array( $current_lang, [ 'cs', 'en' ], true ) ) return;
+
+    $ttl = crx_geo_cookie_ttl();
+    ?>
+    <script>
+    (function () {
+        if ( typeof window.crxGetCookie !== 'function' ) return;
+
+        var ttl         = <?php echo (int) $ttl; ?>;
+        var currentLang = <?php echo wp_json_encode( $current_lang ); ?>;
+        var cookieName  = 'crx_manual_lang';
+        var manualLang  = window.crxGetCookie( cookieName );
+
+        if ( manualLang !== currentLang ) {
+            window.crxSetCookie( cookieName, currentLang, ttl );
+            manualLang = currentLang;
+        }
+
+        if ( manualLang !== '' && manualLang === currentLang ) {
+            return;
+        }
+
+        var browserLangs = navigator.languages || [ navigator.language || 'en' ];
+        var targetLang   = 'en';
+
+        for ( var i = 0; i < browserLangs.length; i++ ) {
+            var l = browserLangs[i].toLowerCase();
+            if ( l === 'cs' || l.startsWith('cs-') || l === 'sk' || l.startsWith('sk-') ) {
+                targetLang = 'cs';
+                break;
+            }
+        }
+
+        window.crxSetCookie( cookieName, targetLang, ttl );
+
+        if ( currentLang !== targetLang ) {
+            var links = document.querySelectorAll(
+                'a[hreflang="' + targetLang + '"]'
+            );
+            if ( links.length > 0 ) {
+                window.location.href = links[0].href;
+                return;
+            }
+
+            var url = window.location.href;
+            if ( targetLang === 'en' ) {
+                url = url.replace( /\/(cs)(\/|$)/, '/en$2' );
+            } else {
+                url = url.replace( /\/(en)(\/|$)/, '/cs$2' );
+            }
+            if ( url !== window.location.href ) {
+                window.location.href = url;
+            }
+        }
+    })();
+    </script>
+    <?php
+}, 20 );

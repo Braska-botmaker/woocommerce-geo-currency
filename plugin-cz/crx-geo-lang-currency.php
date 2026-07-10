@@ -2,7 +2,7 @@
 /**
  * Plugin Name: CRX Geo Lang Currency
  * Description: Automatické přepínání měny podle geolokace IP a jazyka podle jazyka prohlížeče pro WooCommerce + WPML/WCML.
- * Version: 2.0.0
+ * Version: 2.0.1
  * Author: CRX
  */
 
@@ -146,6 +146,12 @@ add_filter( 'wcml_client_currency', function( $currency ) {
 
 add_action( 'wp', function () {
     if ( is_admin() ) return;
+    // Skip AJAX requests (this includes wc-ajax=add_to_cart): the
+    // wcml_client_currency filter above already set the correct currency
+    // during init, before WooCommerce processed the cart action. Calling
+    // set_client_currency() again here, mid-request, makes WCML think the
+    // currency just changed and empties the cart it was just added to.
+    if ( wp_doing_ajax() ) return;
     if ( crx_is_bot_request() ) return;
 
     $country = crx_geo_country();
